@@ -1,0 +1,129 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+/*
+  OneShot — dark instrument panel.
+  Adapted from design-system/MASTER.md: the generated palette was light
+  ("Bookmark & Read-Later") and set Space Mono for both heading and body. The
+  user's stated direction wins — dark, high-contrast, monospace reserved for
+  headings, the process trace, ids and hashes; IBM Plex Sans for long-form body
+  copy. The deviation is recorded in MASTER.md.
+*/
+
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-heading: "Space Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-background: oklch(0.1650 0.0150 258);
+  --color-surface: oklch(0.2050 0.0170 258);
+  --color-elevated: oklch(0.2420 0.0185 258);
+  --color-foreground: oklch(0.9650 0.0060 250);
+  --color-muted: oklch(0.2530 0.0160 258);
+  --color-muted-foreground: oklch(0.7520 0.0180 252);
+  --color-border: oklch(0.3200 0.0180 258);
+  --color-primary: oklch(0.7400 0.1250 240);
+  --color-on-primary: oklch(0.1700 0.0200 258);
+  --color-secondary: oklch(0.5600 0.0250 256);
+  --color-accent: oklch(0.8000 0.1350 195);
+  --color-destructive: oklch(0.6700 0.1850 25);
+  --color-success: oklch(0.7800 0.1450 155);
+  --color-warning: oklch(0.8150 0.1400 85);
+  --color-ring: oklch(0.7400 0.1250 240);
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+
+  --animate-trace-in: trace-in 240ms ease-out both;
+  --animate-pulse-soft: pulse-soft 1.8s ease-in-out infinite;
+
+  @keyframes trace-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes pulse-soft {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.45;
+    }
+  }
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-heading);
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+  }
+
+  /* Keyboard focus must always be visible (MASTER.md pre-delivery checklist). */
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::selection {
+    background-color: oklch(0.7400 0.1250 240 / 35%);
+  }
+}
+
+@utility panel {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+/* The live trace scrolls; keep its scrollbars quiet but visible. */
+@utility scroll-slim {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background-color: var(--color-border);
+    border-radius: 999px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
