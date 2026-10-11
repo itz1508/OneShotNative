@@ -10,9 +10,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { health } from "../lib/api";
+import { fetchSchema, health } from "../lib/api";
 import { clearOverride, isUsingOverride, systemBaseUrl, writeOverride } from "../lib/config";
-import { SCHEMA_VERSION, type Health } from "../lib/schema";
+import { SCHEMA_VERSION, compareContract, type Health, type SchemaSnapshot } from "../lib/schema";
 import { IconAlert, IconCheck, IconRefresh } from "./icons";
 import { Button, Callout, Field, Hint, Mono, Pill, TextInput, cx } from "./ui";
 
@@ -20,33 +20,62 @@ export function SystemStatus() {
   const [url, setUrl] = useState<string>(systemBaseUrl());
   const [draftUrl, setDraftUrl] = useState<string>(systemBaseUrl());
   const [state, setState] = useState<Health | null>(null);
+  const [report, setReport] = useState<SchemaSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [editing, setEditing] = useState(false);
 
-  const probe = useCallback(async () => {
+  const probe = useCallback(async (): Promise<boolean> => {
     setChecking(true);
     setError(null);
     try {
       setState(await health());
+      try {
+        setReport(await fetchSchema());
+      } catch {
+        // Reachable, but the contract could not be read: report nothing rather
+        // than invent a drift verdict out of a missing answer.
+        setReport(null);
+      }
+      return true;
     } catch (cause) {
       setState(null);
+      setReport(null);
       setError(
         cause instanceof Error
           ? cause.message
           : "The OneShot System could not be reached.",
       );
+      return false;
     } finally {
       setChecking(false);
     }
   }, []);
 
   useEffect(() => {
-    void probe();
+    let cancelled = false;
+    let handle: number | undefined;
+
+    // The System is a separate process and may still be starting when this page
+    // loads, so the first probe retries a few times before it is called
+    // unreachable. After that, "Re-check" is the only trigger.
+    const attempt = async (remaining: number) => {
+      const ok = await probe();
+      if (cancelled || ok || remaining <= 0) return;
+      handle = window.setTimeout(() => void attempt(remaining - 1), 1500);
+    };
+
+    void attempt(4);
+
+    return () => {
+      cancelled = true;
+      if (handle !== undefined) window.clearTimeout(handle);
+    };
   }, [probe]);
 
   const reachable = state !== null;
   const schemaMatches = state?.schema_version === SCHEMA_VERSION;
+  const drift = report ? compareContract(report) : null;
 
   function applyUrl() {
     const saved = writeOverride(draftUrl);
@@ -118,8 +147,9 @@ export function SystemStatus() {
             {isUsingOverride() ? <Mono>browser override active</Mono> : null}
           </div>
           <Hint>
-            Stored in this browser only. Set <Mono>VITE_SYSTEM_BASE_URL</Mono> at build time to
-            change the default for everyone.
+            Stored in this browser only. Leave it blank to use the System this dev server proxies
+            to, or set <Mono>VITE_SYSTEM_BASE_URL</Mono> at build time to change the default for
+            everyone.
           </Hint>
         </div>
       ) : null}
@@ -132,8 +162,9 @@ export function SystemStatus() {
         >
           <p>{error}</p>
           <p>
-            The System is a separate Python service — this published app only talks to it. Start
-            it on your host, then set the URL above.
+            The System is a separate Python service — this UI only talks to it. It normally starts
+            alongside the dev server; if it is not running, start it and use Re-check. If it is
+            hosted somewhere else, set the URL above.
           </p>
         </Callout>
       ) : null}
@@ -193,6 +224,53 @@ export function SystemStatus() {
             </dd>
           </div>
         </dl>
+      ) : null}
+
+      {drift ? (
+        drift.inSync ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Pill tone="success">
+              <IconCheck className="size-3" />
+              contract in sync
+            </Pill>
+            <Mono>{drift.serverVersion}</Mono>
+            <Hint>
+              GET /schema matches the client's mirror — {drift.publishedValues} vocabulary values
+              checked.
+            </Hint>
+          </div>
+        ) : (
+          <Callout
+            tone="warning"
+            icon={<IconAlert />}
+            title="The client and the System disagree on the contract"
+          >
+            <p>
+              {drift.versionMismatch
+                ? `The System reports schema ${drift.serverVersion}; this client mirrors ${drift.clientVersion}.`
+                : `Both sides report schema ${drift.serverVersion}, but what the System publishes no longer matches this client:`}
+            </p>
+            {drift.missingModels.length > 0 ? (
+              <p>
+                Models the System no longer publishes:{" "}
+                <Mono>{drift.missingModels.join(", ")}</Mono>.
+              </p>
+            ) : null}
+            {drift.vocabularyGaps.length > 0 ? (
+              <ul className="space-y-1">
+                {drift.vocabularyGaps.map((gap) => (
+                  <li key={gap.name}>
+                    <Mono>{gap.name}</Mono> missing: {gap.values.join(", ")}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <p>
+              Reload the page to pick up the current contract. If it still disagrees, this client
+              needs updating before its results can be trusted.
+            </p>
+          </Callout>
+        )
       ) : null}
 
       {state && !state.generate.configured ? (

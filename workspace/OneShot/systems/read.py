@@ -435,7 +435,7 @@ def _pdf_text(content_stream: bytes) -> str:
         for item in strings:
             out.append(_pdf_unescape(item[1:-1]))
         out.append("\n")
-    return b"".join(out).decode("latin-1", "replace")
+    return "".join(out)
 
 
 def _pdf_unescape(raw: bytes) -> str:

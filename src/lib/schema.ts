@@ -301,3 +301,137 @@ export const SOURCE_TYPES: {
   { value: "docx", label: "DOCX upload", hint: "Word .docx body text. Legacy .doc is not read.", accepts: ".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
   { value: "audio", label: "Audio upload", hint: "Transcribed by the System, if a transcription provider is configured.", accepts: "audio/*" },
 ];
+
+/* ---------------------------------------------------------------------------- *
+ * The contract, checked against the System (GET /schema)
+ *
+ * The types above are a mirror. A mirror that is never compared drifts in
+ * silence, so the shapes the client actually renders from are listed here and
+ * checked against the snapshot the System publishes.
+ * ---------------------------------------------------------------------------- */
+
+/** Models the client mirrors; the System publishes all of these from `GET /schema`. */
+export const MIRRORED_MODELS: readonly string[] = [
+  "SourceInput",
+  "RunOptions",
+  "RunRequest",
+  "SourceProvenance",
+  "ScanObservation",
+  "ScanResult",
+  "ReadSegment",
+  "ReadResult",
+  "SupportedTask",
+  "ContextBlock",
+  "ContextDecision",
+  "PreparedInput",
+  "CoverageDimension",
+  "QualityCheck",
+  "Citation",
+  "GeneratedSection",
+  "GeneratedResult",
+  "ProcessTraceEvent",
+  "OneShotOutput",
+];
+
+/**
+ * Every vocabulary value the UI can render, grouped so a gap can be reported in
+ * words. A value the System no longer sends is a value the UI can no longer
+ * truthfully display.
+ *
+ * `WorkflowCommand` (pause / resume / review / finalize) is deliberately absent:
+ * it travels on `POST /runs/{run_id}/command` and is not part of the snapshot the
+ * System publishes, so there is nothing to compare it against here.
+ */
+export const MIRRORED_VOCABULARIES: readonly { name: string; values: readonly string[] }[] = [
+  { name: "source types", values: SOURCE_TYPES.map((entry) => entry.value) },
+  {
+    name: "scope operations",
+    values: ["INPUT_SOURCE", "ADD_SOURCE", "IMPORT_SOURCE", "REFERENCE_SOURCE", "REMOVE_SOURCE"],
+  },
+  { name: "workflow states", values: WORKFLOW_STATES },
+  { name: "task kinds", values: TASK_KINDS.map((entry) => entry.value) },
+  { name: "scan outcomes", values: ["accessible", "unsupported", "unreadable", "excluded"] },
+  { name: "limitation severities", values: ["info", "warning", "error"] },
+  {
+    name: "stages",
+    values: ["Scan", "Read", "Prepare", "Quality & Coverage Check", "Generate", "Output"],
+  },
+  { name: "trace statuses", values: ["started", "completed", "failed", "skipped", "info"] },
+  { name: "quality outcomes", values: ["Sufficient", "Incomplete", "Unusable"] },
+  {
+    name: "inspection modes",
+    values: ["Text", "Visual", "Files and Folders", "Mixed", "Research When Needed"],
+  },
+];
+
+/** `GET /schema` — the System's Pydantic snapshot. */
+export interface SchemaSnapshot {
+  schema_version: string;
+  models: Record<string, unknown>;
+}
+
+export interface VocabularyGap {
+  name: string;
+  values: string[];
+}
+
+export interface ContractDrift {
+  inSync: boolean;
+  versionMismatch: boolean;
+  serverVersion: string;
+  clientVersion: string;
+  missingModels: string[];
+  vocabularyGaps: VocabularyGap[];
+  /** How many vocabulary values the System published in total. */
+  publishedValues: number;
+}
+
+/** Every string that appears in an `enum` anywhere in the snapshot. */
+function collectEnumValues(node: unknown, into: Set<string>): void {
+  if (Array.isArray(node)) {
+    for (const child of node) collectEnumValues(child, into);
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    if (key === "enum" && Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === "string") into.add(item);
+      }
+      continue;
+    }
+    collectEnumValues(value, into);
+  }
+}
+
+/**
+ * Compare the System's published contract against this client's mirror.
+ *
+ * Three independent signals, because the version can agree while the contents
+ * do not: the version string, the model names, and every vocabulary value the
+ * UI renders from.
+ */
+export function compareContract(snapshot: SchemaSnapshot): ContractDrift {
+  const models = snapshot.models ?? {};
+  const published = new Set<string>();
+  collectEnumValues(models, published);
+
+  const missingModels = MIRRORED_MODELS.filter((name) => !(name in models));
+  const vocabularyGaps = MIRRORED_VOCABULARIES.map(({ name, values }) => ({
+    name,
+    values: values.filter((value) => !published.has(value)),
+  })).filter((gap) => gap.values.length > 0);
+
+  const serverVersion = snapshot.schema_version || "unknown";
+  const versionMismatch = serverVersion !== SCHEMA_VERSION;
+
+  return {
+    inSync: !versionMismatch && missingModels.length === 0 && vocabularyGaps.length === 0,
+    versionMismatch,
+    serverVersion,
+    clientVersion: SCHEMA_VERSION,
+    missingModels,
+    vocabularyGaps,
+    publishedValues: published.size,
+  };
+}

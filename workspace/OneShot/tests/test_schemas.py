@@ -303,7 +303,7 @@ def test_insufficient_run_without_generation_is_valid_and_flags_source_needed() 
 
 def test_an_ungrounded_generated_result_is_not_a_result() -> None:
     with pytest.raises(ValidationError, match="Field required"):
-        GeneratedSection(heading="H", body="B", citations=[])
+        GeneratedSection(heading="H", body="B")
     with pytest.raises(ValidationError, match="must cite at least one source"):
         GeneratedResult(title="T", sections=[], citations=[])
 

@@ -294,7 +294,7 @@ class SourceInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    id: str = Field(min_length=1, max_length=64, pattern=r"\A[A-Za-z0-9_.:-]+\Z")
+    id: str = Field(min_length=1, max_length=64, pattern=r"\A[A-Za-z0-9_.:-]+\z")
     type: SourceType
     label: str = ""
     url: str | None = None
@@ -334,11 +334,14 @@ class SourceInput(BaseModel):
                     "characters — split it or upload it as a file."
                 )
         else:
-            if not self.content_base64:
+            if self.content_base64 is None:
                 raise ValueError(
                     "This source type requires an uploaded file (content_base64)."
                 )
-            size = len(decode_upload(self.content_base64))
+            # A *present but empty* upload is allowed through on purpose: the Scan
+            # stage classifies it truthfully as ``unreadable`` / ``empty_content``
+            # rather than the wire rejecting it where nothing can be reported.
+            size = len(decode_upload(self.content_base64)) if self.content_base64 else 0
             if size > MAX_UPLOAD_BYTES:
                 limit_mb = MAX_UPLOAD_BYTES // (1024 * 1024)
                 raise ValueError(
@@ -390,7 +393,7 @@ class RunRequest(BaseModel):
     # Client-supplied correlation id for the live Process Display channel, so the
     # browser can subscribe before the run starts. The System mints one when
     # omitted.
-    run_id: str | None = Field(default=None, pattern=r"\A[A-Za-z0-9_.:-]{1,64}\Z")
+    run_id: str | None = Field(default=None, pattern=r"\A[A-Za-z0-9_.:-]{1,64}\z")
 
     conversation_id: str = ""
     prompt_message_id: str = ""

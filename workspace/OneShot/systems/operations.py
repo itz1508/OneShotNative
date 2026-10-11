@@ -151,8 +151,19 @@ class RunChannel:
         self._events.put_nowait(event)
 
     def publish_threadsafe(self, event: dict[str, Any]) -> None:
-        """Publish from the pipeline thread."""
-        self._loop.call_soon_threadsafe(self._events.put_nowait, event)
+        """Publish from the pipeline thread.
+
+        A run's channel can outlive the event loop it was created on (for example
+        a late ``/command`` request that lands on a different loop). When that loop
+        is gone there is nobody streaming the channel, so this becomes a no-op: the
+        observed activity is still recorded on the trace, and the workflow state is
+        still applied — publishing a frame must never crash the command.
+        """
+        try:
+            self._loop.call_soon_threadsafe(self._events.put_nowait, event)
+        except RuntimeError:
+            # The owning loop is closed; nothing is subscribed to receive frames.
+            return
 
     async def stream(self):
         """Yield published events until the run closes the channel."""

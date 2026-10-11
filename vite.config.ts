@@ -36,5 +36,30 @@ export default defineConfig(() => ({
   server: {
     allowedHosts: true as const,
     hmr: false,
+    // The OneShot System is a separate Python service that runs alongside this
+    // dev server on 127.0.0.1:8000. Proxying it here keeps the browser on a
+    // single origin: nothing to configure, no CORS to get right, and the live
+    // Process Display (Server-Sent Events) streams straight through. A System
+    // hosted somewhere else is still reachable by setting an absolute URL in the
+    // header — see src/lib/config.ts.
+    proxy: {
+      '/oneshot': {
+        target: 'http://127.0.0.1:8000',
+        changeOrigin: true,
+        // The System's routes live at its root, so the proxy prefix is stripped.
+        rewrite: (path) => path.replace(/^\/oneshot/, ''),
+        // SSE frames must reach the browser as they are produced, never buffered
+        // or transformed in between.
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes) => {
+            const contentType = proxyRes.headers['content-type'] ?? '';
+            if (String(contentType).includes('text/event-stream')) {
+              proxyRes.headers['cache-control'] = 'no-cache, no-transform';
+              proxyRes.headers['x-accel-buffering'] = 'no';
+            }
+          });
+        },
+      },
+    },
   },
 }))

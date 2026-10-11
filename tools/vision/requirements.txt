@@ -1,0 +1,10 @@
+# Dependencies for the one-off diagram-recovery tool.
+#
+# NOT a dependency of the OneShot System. `workspace/OneShot` deliberately does
+# not list these: the recovery runs against the repository, not inside the
+# pipeline, so it must never leak into the System's dependency set.
+#
+#   pip install -r tools/vision/requirements.txt
+#
+strands-agents>=1.0,<2
+httpx>=0.27

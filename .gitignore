@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Rendered Mermaid output
+diagrams/dist/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -34,4 +37,3 @@ __pycache__/
 # Env
 .env
 .env.*
-

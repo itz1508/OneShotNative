@@ -2,17 +2,26 @@
  * Where the System lives.
  *
  * The base URL is **publishable configuration, not a secret**: it is the address
- * of the externally hosted OneShot System that this published UI is a client of.
- * There are no `.env` files on this platform, so resolution falls back through:
+ * of the OneShot System that this UI is a client of. There are no `.env` files on
+ * this platform, so resolution falls back through:
  *
  *   1. a runtime override kept in this browser (set it from the header), then
  *   2. a build-time `VITE_SYSTEM_BASE_URL` if one was configured, then
  *   3. the local default.
  *
+ * The default is **same-origin**. The OneShot System is a separate Python service
+ * that runs alongside the dev server, and the dev server proxies `/oneshot` to it
+ * (see `vite.config.ts`). One origin means nothing to configure and no CORS to get
+ * right — while a System hosted anywhere else is still reached by setting an
+ * absolute URL in the header.
+ *
  * Nothing here is privileged, and no API key is ever held by the client.
  */
 
-export const DEFAULT_SYSTEM_BASE_URL = "http://127.0.0.1:8000";
+/** Same-origin path the dev server proxies to the System (see `vite.config.ts`). */
+export const SAME_ORIGIN_BASE_URL = "/oneshot";
+
+export const DEFAULT_SYSTEM_BASE_URL = SAME_ORIGIN_BASE_URL;
 
 const OVERRIDE_KEY = "oneshot.systemBaseUrl";
 

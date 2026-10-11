@@ -15,6 +15,7 @@ import type {
   Health,
   OneShotOutput,
   RunRequest,
+  SchemaSnapshot,
   StreamEvent,
   WorkflowCommand,
   WorkflowState,
@@ -97,6 +98,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function health(): Promise<Health> {
   return request<Health>("/health");
+}
+
+/** The contract the System publishes, so drift is detectable rather than silent. */
+export function fetchSchema(): Promise<SchemaSnapshot> {
+  return request<SchemaSnapshot>("/schema");
 }
 
 export function startRun(payload: RunRequest): Promise<OneShotOutput> {

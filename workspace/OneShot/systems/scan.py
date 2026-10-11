@@ -196,6 +196,11 @@ def _empty_payload(source: SourceInput) -> tuple[ScanReason, str] | None:
     if source.type is SourceType.PUBLIC_URL:
         return None  # well-formedness is enforced on the wire; reachability is Read's job
 
+    if not (source.content_base64 or "").strip():
+        # A present-but-empty upload: reported as empty rather than decoded into a
+        # malformed error, which is what the wire lets through for Scan to classify.
+        return ScanReason.EMPTY_CONTENT, "The uploaded file is empty."
+
     try:
         payload = decode_upload(source.content_base64 or "")
     except ValueError as exc:
@@ -246,5 +251,5 @@ def _announce(
         f"Scanned {observation.label}: {observation.outcome.value} "
         f"({observation.reason.value}).",
         observation.detail,
-        observation.source_id,
+        source_id=observation.source_id,
     )
