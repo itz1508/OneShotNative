@@ -8,9 +8,10 @@
  * not report.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { EditorReview } from "./components/EditorReview";
+import { OfflineBanner } from "./components/OfflineBanner";
 import { ProcessDisplay } from "./components/ProcessDisplay";
 import { ResultPanel } from "./components/ResultPanel";
 import { SourcePanel } from "./components/SourcePanel";
@@ -33,6 +34,17 @@ export default function App() {
   const run = useRun();
   const [statusOpen, setStatusOpen] = useState(false);
   const [lastRequest, setLastRequest] = useState<RunRequest | null>(null);
+
+  // Gap 8: Close system modal on Escape
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && statusOpen) {
+        setStatusOpen(false);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [statusOpen]);
 
   const running = run.phase === "running";
   const finalized = run.state === "Finalized";
@@ -58,6 +70,15 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {/* Gap 8 — Skip link for keyboard and screen reader accessibility */}
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:border focus:border-accent focus:bg-background focus:px-3.5 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-lg focus:outline-none"
+      >
+        Skip to main content
+      </a>
+      {/* Gap 6 — offline banner; auto-hides when online */}
+      <OfflineBanner />
       <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur">
         <div className="mx-auto flex w-full max-w-[100rem] flex-wrap items-center gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2.5">

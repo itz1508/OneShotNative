@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test:smoke": "xvfb-run -a node scripts/smoke.mjs",
+    "test": "vitest run",
+    "test:smoke": "node scripts/smoke.mjs",
     "diagrams:render": "node scripts/render-diagrams.mjs",
     "diagrams:render:png": "node scripts/render-diagrams.mjs --png"
   },
@@ -29,6 +30,7 @@
     "playwright-core": "^1.64.0",
     "typescript": "~5.9.3",
     "vite": "^7.2.4",
-    "vite-plugin-svgr": "^4.5.0"
+    "vite-plugin-svgr": "^4.5.0",
+    "vitest": "^5.0.3"
   }
 }

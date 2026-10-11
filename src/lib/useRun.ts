@@ -5,11 +5,19 @@
  * the live channel, starts the run, and applies workflow commands on request.
  * It never decides that a stage ran, and it never fills a gap the System left —
  * a failed run shows the System's own explanation.
+ *
+ * Gap fixes applied here:
+ *   Gap 2  — AbortController: the startRun fetch is cancelled on reset / new run.
+ *   Gap 6  — Output persistence: completed outputs are saved to sessionStorage
+ *            so a page reload does not lose a delivered result.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { newRunId, openStream, sendCommand, startRun } from "./api";
+import { log } from "./eventLog";
+import { clearSavedOutput, restoreOutput, saveOutput } from "./useConnection";
+import { validateRunRequest } from "./validation";
 import type {
   OneShotOutput,
   ProcessTraceEvent,
@@ -44,11 +52,29 @@ export function useRun(): RunController {
 
   const runIdRef = useRef<string | null>(null);
   const stopRef = useRef<(() => void) | null>(null);
+  // Gap 2 — AbortController for the startRun fetch.
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Gap 6 — Restore a persisted output on first mount (page-reload recovery).
+  useEffect(() => {
+    const saved = restoreOutput();
+    if (!saved) return;
+    runIdRef.current = saved.runId;
+    setOutput(saved.output);
+    setState(saved.output.state);
+    setPhase("delivered");
+    log("info", "restore", "Restored output from sessionStorage", {
+      runId: saved.runId,
+    });
+  }, []);
 
   const reset = useCallback(() => {
     stopRef.current?.();
     stopRef.current = null;
+    abortRef.current?.abort();
+    abortRef.current = null;
     runIdRef.current = null;
+    clearSavedOutput();
     setPhase("idle");
     setState("Starting");
     setTrace([]);
@@ -59,9 +85,26 @@ export function useRun(): RunController {
 
   const start = useCallback(
     (request: RunRequest) => {
+      // Cancel any in-flight fetch from a previous run (Gap 2).
       stopRef.current?.();
+      abortRef.current?.abort();
+
+      // Gap 5 — Pre-flight validation before opening stream or network fetch.
+      const validation = validateRunRequest(request);
+      if (!validation.valid) {
+        const errorMsg = validation.errors.join(" ");
+        setError(errorMsg);
+        setPhase("failed");
+        log("warn", "validation", errorMsg, { runId: request.run_id });
+        return;
+      }
+
       const runId = request.run_id ?? newRunId();
       runIdRef.current = runId;
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      log("info", "run", "Starting run", { runId });
 
       setPhase("running");
       setState("Starting");
@@ -87,10 +130,13 @@ export function useRun(): RunController {
           case "output":
             setOutput(event.output);
             setState(event.output.state);
+            // Gap 6 — persist so a page reload does not lose the result.
+            saveOutput(runId, event.output);
             break;
           case "failed":
             setError(event.message);
             setPhase("failed");
+            log("error", "run", event.message, { runId });
             break;
           default:
             break;
@@ -105,15 +151,23 @@ export function useRun(): RunController {
         onClosed: () => setLive(false),
       });
 
-      startRun({ ...request, run_id: runId })
+      startRun({ ...request, run_id: runId }, controller.signal)
         .then((result) => {
           setOutput(result);
           setState(result.state);
           setPhase("delivered");
+          // Gap 6 — persist final result.
+          saveOutput(runId, result);
+          log("info", "run", "Delivered", { runId });
         })
         .catch((cause: unknown) => {
-          setError(cause instanceof Error ? cause.message : "OneShot could not start this run.");
+          // AbortError means the user triggered a reset — not a real failure.
+          if (cause instanceof DOMException && cause.name === "AbortError") return;
+          const msg =
+            cause instanceof Error ? cause.message : "OneShot could not start this run.";
+          setError(msg);
           setPhase("failed");
+          log("error", "run", msg, { runId });
         })
         .finally(() => {
           setLive(false);
@@ -122,17 +176,32 @@ export function useRun(): RunController {
     [],
   );
 
-  const command = useCallback(async (next: WorkflowCommand, optimistic?: WorkflowState) => {
-    const runId = runIdRef.current;
-    if (!runId) return;
-    if (optimistic) setState(optimistic);
-    try {
-      const result = await sendCommand(runId, next);
-      setState(result.state);
-    } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "The System refused that command.");
-    }
-  }, []);
+  const command = useCallback(
+    async (cmd: WorkflowCommand, optimistic?: WorkflowState) => {
+      const runId = runIdRef.current;
+      if (!runId) return;
+      let previousState: WorkflowState = "Starting";
+      setState((prev) => {
+        previousState = prev;
+        return optimistic ?? prev;
+      });
+      log("info", "command", cmd, { runId });
+      try {
+        const result = await sendCommand(runId, cmd);
+        setState(result.state);
+      } catch (cause: unknown) {
+        // Gap 2: Rollback optimistic update on server error
+        if (optimistic) {
+          setState(previousState);
+        }
+        const msg =
+          cause instanceof Error ? cause.message : "The System refused that command.";
+        setError(msg);
+        log("error", "command", msg, { runId });
+      }
+    },
+    [],
+  );
 
   return { phase, state, trace, output, error, live, runId: runIdRef.current, start, command, reset };
 }

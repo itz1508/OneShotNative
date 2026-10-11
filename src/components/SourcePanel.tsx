@@ -113,6 +113,7 @@ export function SourcePanel({ running, onRun, hasResult }: SourcePanelProps) {
   const [taskKind, setTaskKind] = useState<TaskKind>("unclassified");
   const [drafts, setDrafts] = useState<Draft[]>([newDraft("text")]);
   const [pauseBeforeGenerate, setPauseBeforeGenerate] = useState(true);
+  const [proceedOnIncomplete, setProceedOnIncomplete] = useState(false);
   const [maxContextChars, setMaxContextChars] = useState(200_000);
   const [maxPerSource, setMaxPerSource] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
@@ -203,6 +204,8 @@ export function SourcePanel({ running, onRun, hasResult }: SourcePanelProps) {
         max_context_chars: Number.isFinite(maxContextChars) ? maxContextChars : 200_000,
         max_chars_per_source:
           Number.isFinite(parsedPerSource) && parsedPerSource >= 200 ? parsedPerSource : null,
+        // Gap 7 — HITL for partial context.
+        proceed_on_incomplete: proceedOnIncomplete,
       },
     });
   }
@@ -289,6 +292,23 @@ export function SourcePanel({ running, onRun, hasResult }: SourcePanelProps) {
               <Mono>so you can resume it yourself</Mono>
             </label>
           </div>
+        </div>
+
+        {/* Gap 7 — HITL for partial context */}
+        <div className="flex items-center gap-2.5">
+          <label className="flex cursor-pointer items-center gap-2.5 text-sm text-foreground">
+            <input
+              type="checkbox"
+              className="size-4 cursor-pointer accent-[var(--color-primary)]"
+              checked={proceedOnIncomplete}
+              onChange={(event) => setProceedOnIncomplete(event.target.checked)}
+            />
+            Proceed on incomplete context
+          </label>
+          <Hint>
+            When unchecked (default), an Incomplete quality check pauses the run
+            and shows the gaps for your review before generating.
+          </Hint>
         </div>
       </Panel>
 

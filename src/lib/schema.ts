@@ -91,6 +91,17 @@ export interface RunOptions {
   pause_before_generate?: boolean;
   max_context_chars?: number;
   max_chars_per_source?: number | null;
+  /**
+   * Gap 7 — HITL for partial context.
+   *
+   * When false (default), an `Incomplete` Quality & Coverage Check outcome
+   * stops the run and surfaces the known gaps in EditorReview so the user can
+   * decide before generation proceeds.
+   *
+   * When true, the System proceeds to Generate even with partial context. The
+   * limitations are still reported in the output — generation just isn't blocked.
+   */
+  proceed_on_incomplete?: boolean;
 }
 
 export interface RunRequest {
