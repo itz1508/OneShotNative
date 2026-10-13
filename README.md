@@ -4,29 +4,41 @@ One objective, the sources it applies to, and a process you can watch.
 
 **OneShotNative** is the native repo for **OneShot** — a system-owned responsibility workflow:
 
-- **Client (repo root):** React + Vite + Tailwind CSS app. It declares the request, observes the run, and presents what came back. It holds no keys, performs no pipeline work, and never invents a step or result the System did not report.
-- **System (`workspace/OneShot/`):** Python 3.11 service (FastAPI + uvicorn, Pydantic, httpx) that owns the pipeline — Scan → Read → Prepare → Quality & Coverage Check → Generate — plus contracts, operations, and HTTP API. See `workspace/OneShot/README.md` for provenance and runtime details.
+- **Frontend (`frontend/`):** React + Vite + Tailwind CSS app. It declares the request, observes the run, and presents what came back. It holds no keys, performs no pipeline work, and never invents a step or result the System did not report.
+- **System (`systems/`):** Python 3.11 service (FastAPI + uvicorn, Pydantic, httpx) that owns the pipeline — Scan → Read → Prepare → Quality & Coverage Check → Generate — plus contracts, operations, and HTTP API.
 
 ## Layout
 
 ```
 OneShotNative/
-├── src/                    # React client (App, components, lib/)
+├── frontend/               # React client
 │   ├── components/         # EditorReview, ProcessDisplay, ResultPanel, SourcePanel, SystemStatus, ui, icons
-│   └── lib/                # api.ts (typed client), config.ts, schema.ts, useRun.ts, format.ts
-├── public/                 # static assets
-├── workspace/OneShot/      # Python System (systems/, tests/, pyproject.toml)
-├── index.html
+│   ├── lib/                # api.ts (typed client), config.ts, schema.ts, useRun.ts, format.ts
+│   ├── App.tsx
+│   ├── main.tsx
+│   └── index.html
+├── systems/                # Python System
+│   ├── api.py
+│   ├── schemas.py
+│   ├── operations.py
+│   └── ...
+├── tests/                  # Python tests
+├── tools/                  # Supporting tools
+├── diagrams/               # Diagram rendering
+├── scripts/                # Build/test scripts
+├── docker/                 # Docker configuration
+├── public/                 # Static assets
 ├── package.json
 ├── vite.config.ts
 ├── tsconfig.json
-└── vite-env.d.ts
+├── pyproject.toml
+└── uv.lock
 ```
 
 ## Prerequisites
 
 - Node.js 22+ and npm
-- Python 3.11 via `uv` (see `workspace/OneShot/.python-version`) — `uv` installs it on demand
+- Python 3.11 via `uv` (see `.python-version`) — `uv` installs it on demand
 - `uv` 0.9.x
 
 ## Run
@@ -41,7 +53,6 @@ npm run dev
 System (separate process, reached through dev proxy / `VITE_SYSTEM_BASE_URL`):
 
 ```sh
-cd workspace/OneShot
 uv run --extra test pytest
 ```
 
