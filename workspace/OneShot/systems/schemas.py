@@ -75,6 +75,15 @@ __all__ = [
     "ScanOutcome",
     "ScanReason",
     "ContextDecisionReason",
+    "VariableDecl",
+    "PromptRef",
+    "PromptVersionView",
+    "PromptSummary",
+    "PromptDetail",
+    "ResolvedPromptView",
+    "PromptStoreState",
+    "PromptCreateRequest",
+    "PromptDraftRequest",
     "SourceInput",
     "RunOptions",
     "RunRequest",
@@ -105,7 +114,12 @@ __all__ = [
 # evidence, generated results must be grounded, task kind is enumerated, source
 # identity is required, scan outcomes are classified, instructions and content
 # are separated, and context inclusion/exclusion is recorded.
-SCHEMA_VERSION = "1.1"
+# 1.1 -> 1.2 adds the Prompt Workspace wire shapes: ``RunRequest.prompt_ref``
+# (a saved prompt version to run against, with the values to freeze) and
+# ``OneShotOutput.prompt`` (the frozen resolution the run actually executed).
+# Per M1 D-5 the bump is deliberate: the client mirrors this version, so a
+# mismatch stays detectable rather than silent.
+SCHEMA_VERSION = "1.2"
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_INLINE_TEXT_CHARS = 2_000_000
@@ -263,6 +277,127 @@ class Limitation(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Prompt Workspace (wire shapes)
+#
+# A prompt asset carries a mutable draft and a sequence of immutable published
+# versions. The wire exposes the draft, the version list, and — for a run — the
+# *frozen* resolution the System executed. Nothing here implies durability: the
+# M1 store is in memory, and every store-view carries a ``durable: false`` state
+# for the client to show rather than hide.
+# --------------------------------------------------------------------------- #
+
+
+class VariableDecl(BaseModel):
+    """A variable a prompt declares, with the value to use when a run omits one."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"\A[A-Za-z0-9_]+\z")
+    default: str | None = None
+    description: str = ""
+
+
+class PromptRef(BaseModel):
+    """A saved prompt version to run against, plus the values to freeze (D-4).
+
+    ``version`` omitted (``null``) resolves to the prompt's **latest** published
+    version at admission; an integer pins that exact version.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    prompt_id: str = Field(min_length=1, max_length=64)
+    version: int | None = Field(default=None, ge=1)
+    variables: dict[str, str] = Field(default_factory=dict)
+
+
+class PromptVersionView(BaseModel):
+    """A published, immutable version as delivered to the client."""
+
+    id: str
+    prompt_id: str
+    number: int = Field(ge=1)
+    name: str
+    body: str
+    variables: list[VariableDecl] = Field(default_factory=list)
+    content_hash: str
+    created_at: str
+
+
+class PromptSummary(BaseModel):
+    """One row of the workspace list."""
+
+    id: str
+    name: str
+    latest_version: int | None = None
+    version_count: int = Field(default=0, ge=0)
+    variable_names: list[str] = Field(default_factory=list)
+    updated_at: str
+
+
+class PromptDetail(BaseModel):
+    """A prompt asset plus its editable draft."""
+
+    id: str
+    name: str
+    body: str
+    variables: list[VariableDecl] = Field(default_factory=list)
+    latest_version: int | None = None
+    version_count: int = Field(default=0, ge=0)
+    created_at: str
+    updated_at: str
+
+
+class ResolvedPromptView(BaseModel):
+    """The frozen snapshot a run executed against (D-4).
+
+    ``version_id`` is the identity of the exact version that ran, and
+    ``variables`` are the values that were frozen — together they are why an
+    edit made after the run started could not change its result.
+    """
+
+    prompt_id: str
+    prompt_name: str
+    version_number: int = Field(ge=1)
+    version_id: str
+    version_hash: str
+    requested_version: int | None = None
+    variables: dict[str, str] = Field(default_factory=dict)
+    rendered: str
+    frozen_at: str
+
+
+class PromptStoreState(BaseModel):
+    """What the System can truthfully say about the store (D-0)."""
+
+    kind: str
+    durable: bool
+    prompts: int = Field(ge=0)
+    versions: int = Field(ge=0)
+    note: str
+
+
+class PromptCreateRequest(BaseModel):
+    """``POST /prompts`` — start a new prompt with an empty (or seeded) draft."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    body: str = ""
+    variables: list[VariableDecl] = Field(default_factory=list)
+
+
+class PromptDraftRequest(BaseModel):
+    """``PATCH /prompts/{id}/draft`` — save the draft. Never publishes, never runs."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    body: str | None = None
+    variables: list[VariableDecl] | None = None
+
+
+# --------------------------------------------------------------------------- #
 # Request side
 # --------------------------------------------------------------------------- #
 
@@ -399,6 +534,12 @@ class RunRequest(BaseModel):
     prompt_message_id: str = ""
     idempotency_key: str = ""
     expected_versions: dict[str, str] = Field(default_factory=dict)
+
+    # A saved prompt version to run against (feature F). When present the System
+    # resolves it to a concrete version at admission and freezes it, replacing
+    # ``intent`` with the rendered body — so what the run executed cannot move
+    # under it. Absent for a v1 direct-intent run, which is unchanged.
+    prompt_ref: PromptRef | None = None
 
     @model_validator(mode="after")
     def _no_duplicate_ids(self) -> RunRequest:
@@ -887,6 +1028,9 @@ class OneShotOutput(BaseModel):
     generated: GeneratedResult | None = None
     trace: list[ProcessTraceEvent] = Field(default_factory=list)
     limitations: list[Limitation] = Field(default_factory=list)
+    # The frozen prompt resolution this run executed against (feature F). ``None``
+    # for a direct-intent run; present when the run was driven by a saved prompt.
+    prompt: ResolvedPromptView | None = None
 
     @model_validator(mode="after")
     def _trace_is_ordered_and_contiguous(self) -> OneShotOutput:
@@ -944,6 +1088,13 @@ def schema_snapshot() -> dict[str, Any]:
     snapshot makes any divergence detectable instead of silent.
     """
     models: list[type[BaseModel]] = [
+        VariableDecl,
+        PromptRef,
+        PromptVersionView,
+        PromptSummary,
+        PromptDetail,
+        ResolvedPromptView,
+        PromptStoreState,
         SourceInput,
         RunOptions,
         RunRequest,

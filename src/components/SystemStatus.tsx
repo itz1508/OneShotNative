@@ -10,9 +10,8 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { clearApiKey, fetchSchema, getApiKey, getCircuitStatus, health, setApiKey } from "../lib/api";
+import { fetchSchema, health } from "../lib/api";
 import { clearOverride, isUsingOverride, systemBaseUrl, writeOverride } from "../lib/config";
-import { clearLog, getLog } from "../lib/eventLog";
 import { SCHEMA_VERSION, compareContract, type Health, type SchemaSnapshot } from "../lib/schema";
 import { IconAlert, IconCheck, IconRefresh } from "./icons";
 import { Button, Callout, Field, Hint, Mono, Pill, TextInput, cx } from "./ui";
@@ -20,14 +19,11 @@ import { Button, Callout, Field, Hint, Mono, Pill, TextInput, cx } from "./ui";
 export function SystemStatus() {
   const [url, setUrl] = useState<string>(systemBaseUrl());
   const [draftUrl, setDraftUrl] = useState<string>(systemBaseUrl());
-  const [apiKey, setApiKeyState] = useState<string>(getApiKey());
-  const [draftApiKey, setDraftApiKey] = useState<string>(getApiKey());
   const [state, setState] = useState<Health | null>(null);
   const [report, setReport] = useState<SchemaSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [editing, setEditing] = useState(false);
-  const [showLogs, setShowLogs] = useState(false);
 
   const probe = useCallback(async (): Promise<boolean> => {
     setChecking(true);
@@ -97,19 +93,6 @@ export function SystemStatus() {
     void probe();
   }
 
-  function applyApiKey() {
-    setApiKey(draftApiKey);
-    setApiKeyState(draftApiKey.trim());
-  }
-
-  function clearKey() {
-    clearApiKey();
-    setApiKeyState("");
-    setDraftApiKey("");
-  }
-
-  const circuitStatus = getCircuitStatus();
-
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -117,9 +100,6 @@ export function SystemStatus() {
           {reachable ? <IconCheck className="size-3" /> : <IconAlert className="size-3" />}
           {reachable ? "System reachable" : error ? "System unreachable" : "checking…"}
         </Pill>
-        {circuitStatus.isOpen ? (
-          <Pill tone="warning">Circuit open ({circuitStatus.secondsRemaining}s)</Pill>
-        ) : null}
         <Mono>{url}</Mono>
         <Button
           size="sm"
@@ -137,15 +117,7 @@ export function SystemStatus() {
           onClick={() => setEditing((open) => !open)}
           aria-expanded={editing}
         >
-          {editing ? "Close" : "Change URL / Auth"}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => setShowLogs((open) => !open)}
-          aria-expanded={showLogs}
-        >
-          {showLogs ? "Hide logs" : "Diagnostics"}
+          {editing ? "Close" : "Change URL"}
         </Button>
       </div>
 
@@ -179,38 +151,6 @@ export function SystemStatus() {
             to, or set <Mono>VITE_SYSTEM_BASE_URL</Mono> at build time to change the default for
             everyone.
           </Hint>
-
-          {/* Gap 1 — API key */}
-          <Field
-            label="API key (optional)"
-            htmlFor="api-key"
-            hint="Stored in sessionStorage only — cleared when the tab is closed."
-          >
-            <div className="flex gap-2">
-              <TextInput
-                id="api-key"
-                type="password"
-                value={draftApiKey}
-                placeholder="sk-…"
-                autoComplete="off"
-                spellCheck={false}
-                onChange={(event) => setDraftApiKey(event.target.value)}
-              />
-              <Button size="sm" variant="primary" onClick={applyApiKey}>
-                Save
-              </Button>
-              {apiKey ? (
-                <Button size="sm" variant="ghost" onClick={clearKey}>
-                  Clear
-                </Button>
-              ) : null}
-            </div>
-          </Field>
-          {apiKey ? (
-            <Hint>API key active — sent as a Bearer token on every request.</Hint>
-          ) : (
-            <Hint>No key set. If the System requires one, add it here.</Hint>
-          )}
         </div>
       ) : null}
 
@@ -342,49 +282,6 @@ export function SystemStatus() {
             key on the System host.
           </p>
         </Callout>
-      ) : null}
-
-      {showLogs ? (
-        <div className="space-y-2 rounded-md border border-border bg-background/50 p-3">
-          <div className="flex items-center justify-between">
-            <h3 className="font-heading text-xs uppercase tracking-wider text-muted-foreground">
-              Client Diagnostics & Event Log (Gap 3)
-            </h3>
-            <Button size="sm" variant="ghost" onClick={() => clearLog()}>
-              Clear logs
-            </Button>
-          </div>
-          <div className="max-h-48 overflow-y-auto space-y-1 font-mono text-[11px]">
-            {getLog().length === 0 ? (
-              <p className="text-muted-foreground">No events logged yet.</p>
-            ) : (
-              getLog()
-                .slice(-25)
-                .map((entry, idx) => (
-                  <div key={idx} className="flex flex-wrap items-baseline gap-2 border-b border-border/40 pb-0.5">
-                    <span className="text-foreground/50">
-                      {new Date(entry.at).toLocaleTimeString()}
-                    </span>
-                    <span
-                      className={
-                        entry.level === "error"
-                          ? "text-destructive font-medium"
-                          : entry.level === "warn"
-                            ? "text-warning"
-                            : "text-accent"
-                      }
-                    >
-                      [{entry.type}]
-                    </span>
-                    {entry.runId ? (
-                      <span className="text-foreground/60">{entry.runId.slice(0, 12)}…</span>
-                    ) : null}
-                    <span className="text-foreground">{entry.message}</span>
-                  </div>
-                ))
-            )}
-          </div>
-        </div>
       ) : null}
     </div>
   );

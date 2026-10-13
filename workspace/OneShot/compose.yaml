@@ -1,0 +1,40 @@
+# OneShot System — local / verification compose.
+#
+# Loopback only. The System holds provider keys on the host and must never be
+# published to the public network without a separately approved TLS/auth design.
+#
+# Provider secrets are interpolated from the host shell (or a .env file placed
+# *outside* source control) — no credential is ever baked into the image. This
+# file is safe to commit: it defines *where* secrets come from, not their values.
+services:
+  system:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oneshot-system:local
+    environment:
+      ONESHOT_HOST: "0.0.0.0"
+      ONESHOT_PORT: "8787"
+      ONESHOT_DATA_DIR: "/data"
+      ONESHOT_OUTPUT_DIR: "/data/artifacts"
+      # Model selection. Leave ONESHOT_MODEL_PROVIDER unset to run the
+      # source-evidence pipeline with no model call at all (the default).
+      ONESHOT_MODEL_PROVIDER: "${ONESHOT_MODEL_PROVIDER:-}"
+      ONESHOT_MODEL: "${ONESHOT_MODEL:-}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GEMINI_BASE_URL: "${GEMINI_BASE_URL:-}"
+      # NOTE: `localhost` inside the container is the container itself. To reach a
+      # model running on the host, set this to the host's reachable address
+      # (e.g. host.docker.internal) — never leave it pointing at loopback.
+      OLLAMA_HOST: "${OLLAMA_HOST:-}"
+    ports:
+      # Bound to loopback on purpose — not "0.0.0.0:8787".
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - oneshot-data:/data
+    restart: unless-stopped
+
+volumes:
+  oneshot-data:

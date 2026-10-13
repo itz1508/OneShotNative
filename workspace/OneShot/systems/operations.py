@@ -31,6 +31,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -38,6 +39,7 @@ from uuid import uuid4
 from systems.contracts import ContractError, JobCreate
 from systems.generator import GenerationFailed, GenerationUnavailable, generate
 from systems.prepare import prepare
+from systems.prompts import PromptStore, ResolvedPrompt, default_store
 from systems.quality import check as check_quality
 from systems.read import read
 from systems.scan import scan
@@ -48,6 +50,7 @@ from systems.schemas import (
     LimitationSeverity,
     OneShotOutput,
     ProcessTraceEvent,
+    ResolvedPromptView,
     RunRequest,
     SourceInput,
     SourceProvenance,
@@ -77,6 +80,10 @@ class Admission:
     run_id: str
     request: RunRequest
     job: JobCreate | None
+    #: The frozen prompt resolution, when the run was prompt-driven (D-4).
+    resolved_prompt: ResolvedPrompt | None = None
+    #: The request exactly as the caller sent it, before any prompt substitution.
+    requested: RunRequest | None = None
 
     @property
     def intent(self) -> str:
@@ -90,16 +97,45 @@ class Admission:
     def task_kind(self) -> TaskKind:
         return self.request.task_kind
 
+    @property
+    def is_prompt_driven(self) -> bool:
+        return self.resolved_prompt is not None
 
-def admit(request: RunRequest) -> Admission:
-    """Admit a request as a run.
 
-    When the caller supplied job identity (conversation, objective message,
+def admit(request: RunRequest, *, store: PromptStore | None = None) -> Admission:
+    """Admit a request as a run — freezing any saved prompt it names.
+
+    When the caller supplied **job identity** (conversation, objective message,
     idempotency key, expected versions), the domain admission contract is built
     too, so a partial identity is refused truthfully instead of half-honoured.
     **D3:** that job is carried for identity only — v1 never calls
-    ``verify_sources()`` and claims no drift protection.
+    ``verify_sources()`` and claims no drift protection. A prompt-driven run does
+    **not** set those fields by itself, so it does not trip the job contract.
+
+    When the caller named a saved prompt (``prompt_ref``), it is **resolved and
+    frozen here, once** (D-4): ``latest`` becomes a concrete version, the variable
+    values are fixed, and the rendered body replaces ``intent``. Everything
+    downstream reads that snapshot, which is why editing the prompt after the run
+    started cannot change its result. An unresolvable prompt — unknown, no such
+    version, or a variable with no value and no default — is refused here, so the
+    run never starts.
     """
+    resolved: ResolvedPrompt | None = None
+    effective = request
+    if request.prompt_ref is not None:
+        source_store = store or default_store()
+        resolved = source_store.resolve(
+            request.prompt_ref.prompt_id,
+            version=request.prompt_ref.version,
+            variables=request.prompt_ref.variables,
+        )
+        effective = request.model_copy(
+            update={
+                "intent": resolved.rendered,
+                "prompt_message_id": resolved.version_id,
+            }
+        )
+
     run_id = (request.run_id or "").strip() or f"run_{uuid4().hex[:12]}"
     supplied_identity = any(
         (
@@ -110,7 +146,13 @@ def admit(request: RunRequest) -> Admission:
         )
     )
     job = request.to_job_create() if supplied_identity else None
-    return Admission(run_id=run_id, request=request, job=job)
+    return Admission(
+        run_id=run_id,
+        request=effective,
+        job=job,
+        resolved_prompt=resolved,
+        requested=request,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -463,6 +505,7 @@ def execute(admission: Admission, channel: RunChannel) -> OneShotOutput:
         generated=generated,
         trace=trace.events,
         limitations=limitations,
+        prompt=_prompt_view(admission.resolved_prompt),
     )
 
     document = write_output(output)
@@ -472,6 +515,32 @@ def execute(admission: Admission, channel: RunChannel) -> OneShotOutput:
         f"Wrote output.json — {len(document):,} characters, schema {output.schema_version}.",
     )
     return output.model_copy(update={"trace": trace.events})
+
+
+def _iso(epoch_seconds: float) -> str:
+    """An ISO-8601 UTC timestamp, so a frozen time is unambiguous to the client."""
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
+
+def _prompt_view(resolved: ResolvedPrompt | None) -> ResolvedPromptView | None:
+    """The frozen prompt resolution delivered with the result (feature F).
+
+    ``None`` for a direct-intent run — the field is present only when a saved
+    prompt actually drove the run, never as an empty placeholder.
+    """
+    if resolved is None:
+        return None
+    return ResolvedPromptView(
+        prompt_id=resolved.prompt_id,
+        prompt_name=resolved.prompt_name,
+        version_number=resolved.version_number,
+        version_id=resolved.version_id,
+        version_hash=resolved.version_hash,
+        requested_version=resolved.requested_version,
+        variables=dict(resolved.variables),
+        rendered=resolved.rendered,
+        frozen_at=_iso(resolved.frozen_at),
+    )
 
 
 def _provenance(request, scan_result, read_result, mode) -> list[SourceProvenance]:

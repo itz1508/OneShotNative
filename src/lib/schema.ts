@@ -9,7 +9,7 @@
  * silent: the header compares the two at runtime.
  */
 
-export const SCHEMA_VERSION = "1.1";
+export const SCHEMA_VERSION = "1.2";
 
 export type SourceType =
   | "public_url"
@@ -91,17 +91,94 @@ export interface RunOptions {
   pause_before_generate?: boolean;
   max_context_chars?: number;
   max_chars_per_source?: number | null;
-  /**
-   * Gap 7 — HITL for partial context.
-   *
-   * When false (default), an `Incomplete` Quality & Coverage Check outcome
-   * stops the run and surfaces the known gaps in EditorReview so the user can
-   * decide before generation proceeds.
-   *
-   * When true, the System proceeds to Generate even with partial context. The
-   * limitations are still reported in the output — generation just isn't blocked.
-   */
-  proceed_on_incomplete?: boolean;
+}
+
+/* ---------------------------------------------------------------------------- *
+ * The Prompt Workspace contract (mirrors systems/schemas.py)
+ *
+ * A prompt asset has a mutable draft and immutable published versions. A run may
+ * name a saved version to execute against (prompt_ref); the System freezes that
+ * resolution at admission and reports it back on the output (prompt). The store
+ * is in memory for Milestone 1 — `PromptStoreState.durable` is how the UI can say
+ * so without hiding it.
+ * ---------------------------------------------------------------------------- */
+
+export interface VariableDecl {
+  name: string;
+  default: string | null;
+  description: string;
+}
+
+/** A saved prompt version to run against. `version: null` means "latest". */
+export interface PromptRef {
+  prompt_id: string;
+  version?: number | null;
+  variables?: Record<string, string>;
+}
+
+export interface PromptVersionView {
+  id: string;
+  prompt_id: string;
+  number: number;
+  name: string;
+  body: string;
+  variables: VariableDecl[];
+  content_hash: string;
+  created_at: string;
+}
+
+export interface PromptSummary {
+  id: string;
+  name: string;
+  latest_version: number | null;
+  version_count: number;
+  variable_names: string[];
+  updated_at: string;
+}
+
+export interface PromptDetail {
+  id: string;
+  name: string;
+  body: string;
+  variables: VariableDecl[];
+  latest_version: number | null;
+  version_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The frozen resolution a prompt-driven run executed against (feature F). */
+export interface ResolvedPromptView {
+  prompt_id: string;
+  prompt_name: string;
+  version_number: number;
+  version_id: string;
+  version_hash: string;
+  requested_version: number | null;
+  variables: Record<string, string>;
+  rendered: string;
+  frozen_at: string;
+}
+
+/** What the System can truthfully say about the prompt store (D-0). */
+export interface PromptStoreState {
+  kind: string;
+  durable: boolean;
+  prompts: number;
+  versions: number;
+  note: string;
+}
+
+export interface PromptCreateRequest {
+  name: string;
+  body?: string;
+  variables?: VariableDecl[];
+}
+
+export interface PromptDraftRequest {
+  name?: string;
+  body?: string;
+  variables?: VariableDecl[];
 }
 
 export interface RunRequest {
@@ -111,6 +188,11 @@ export interface RunRequest {
   options?: RunOptions;
   /** Supplied by the client so the live channel can be opened before the run starts. */
   run_id?: string;
+  /**
+   * A saved prompt version to run against (feature F). When present the System
+   * resolves it at admission and replaces `intent` with the frozen rendered body.
+   */
+  prompt_ref?: PromptRef | null;
 }
 
 export interface SourceProvenance {
@@ -246,6 +328,8 @@ export interface OneShotOutput {
   generated: GeneratedResult | null;
   trace: ProcessTraceEvent[];
   limitations: Limitation[];
+  /** The frozen prompt resolution this run executed against, when prompt-driven. */
+  prompt: ResolvedPromptView | null;
 }
 
 export interface ProviderStatus {
@@ -269,6 +353,7 @@ export interface Health {
   stateless: boolean;
   generate: ProviderStatus;
   transcribe: TranscriberStatus;
+  prompts: PromptStoreState;
   inspection_modes_v1: string[];
   workflow_states: string[];
 }
@@ -323,6 +408,13 @@ export const SOURCE_TYPES: {
 
 /** Models the client mirrors; the System publishes all of these from `GET /schema`. */
 export const MIRRORED_MODELS: readonly string[] = [
+  "VariableDecl",
+  "PromptRef",
+  "PromptVersionView",
+  "PromptSummary",
+  "PromptDetail",
+  "ResolvedPromptView",
+  "PromptStoreState",
   "SourceInput",
   "RunOptions",
   "RunRequest",

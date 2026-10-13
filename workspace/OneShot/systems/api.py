@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -32,12 +33,20 @@ from pydantic import BaseModel, ConfigDict
 from systems.contracts import ContractError
 from systems.generator import provider_status
 from systems.operations import RunRegistry, admit, apply_command, run
+from systems.prompts import VariableDecl as DomainVariableDecl
+from systems.prompts import default_store
 from systems.read import transcriber_status
 from systems.scan import V1_INSPECTION_MODES
 from systems.schemas import (
     SCHEMA_VERSION,
     OneShotOutput,
+    PromptCreateRequest,
+    PromptDetail,
+    PromptDraftRequest,
+    PromptSummary,
+    PromptVersionView,
     RunRequest,
+    VariableDecl,
     WorkflowCommand,
     WorkflowState,
     schema_snapshot,
@@ -75,7 +84,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=_ORIGIN_REGEX,
     allow_origins=_extra_origins(),
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
     allow_headers=["*"],
     allow_credentials=False,
     max_age=600,
@@ -98,10 +107,21 @@ async def root() -> dict[str, Any]:
     return {
         "service": "oneshot-system",
         "schema_version": SCHEMA_VERSION,
-        "endpoints": ["/health", "/schema", "/run", "/runs/{run_id}/events", "/runs/{run_id}/command"],
+        "endpoints": [
+            "/health",
+            "/schema",
+            "/prompts",
+            "/prompts/{prompt_id}",
+            "/prompts/{prompt_id}/draft",
+            "/prompts/{prompt_id}/versions",
+            "/run",
+            "/runs/{run_id}/events",
+            "/runs/{run_id}/command",
+        ],
         "note": (
             "The System runs here; the published UI is a client of it. Every run "
-            "returns one output.json and keeps no history."
+            "returns one output.json and keeps no run history. Prompts and their "
+            "versions are held in memory for the life of the process only."
         ),
     }
 
@@ -116,6 +136,7 @@ async def health() -> dict[str, Any]:
         "stateless": True,
         "generate": provider_status(),
         "transcribe": transcriber_status(),
+        "prompts": default_store().state(),
         "inspection_modes_v1": sorted(mode.value for mode in V1_INSPECTION_MODES),
         "workflow_states": [state.value for state in WorkflowState],
     }
@@ -125,6 +146,173 @@ async def health() -> dict[str, Any]:
 async def schema() -> dict[str, Any]:
     """The contract the client mirrors, so drift is detectable rather than silent."""
     return schema_snapshot()
+
+
+# --------------------------------------------------------------------------- #
+# Prompt Workspace
+#
+# A prompt asset: a draft you edit, and immutable published versions. Saving a
+# draft never publishes and never runs; publishing freezes a version; a run
+# resolves a version (latest or pinned) and freezes it at admission. The store is
+# in memory (D-0) — the honesty about that lives in ``/health`` and in every
+# store view, not in a claim these routes do not make.
+# --------------------------------------------------------------------------- #
+
+
+def _store():
+    return default_store()
+
+
+def _iso(epoch_seconds: float) -> str:
+    return datetime.fromtimestamp(epoch_seconds, tz=timezone.utc).isoformat()
+
+
+def _find_prompt(prompt_id: str):
+    """Return the asset or raise a 404 whose sentence the UI can show verbatim."""
+    asset = default_store().find(prompt_id)
+    if asset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No prompt with id {prompt_id!r} is known to this System. Prompts "
+                "are held in memory only, so a restart clears the workspace."
+            ),
+        )
+    return asset
+
+
+def _wire_decls(declared) -> list[VariableDecl]:
+    return [
+        VariableDecl(name=d.name, default=d.default, description=d.description)
+        for d in declared
+    ]
+
+
+def _domain_decls(declared) -> list[DomainVariableDecl]:
+    if declared is None:
+        return []
+    return [
+        DomainVariableDecl(name=d.name, default=d.default, description=d.description)
+        for d in declared
+    ]
+
+
+def _summary(asset) -> PromptSummary:
+    versions = default_store().versions(asset.id)
+    names = (
+        list(versions[-1].variable_names)
+        if versions
+        else [d.name for d in asset.variables]
+    )
+    return PromptSummary(
+        id=asset.id,
+        name=asset.name,
+        latest_version=asset.latest_version_number,
+        version_count=len(versions),
+        variable_names=names,
+        updated_at=_iso(asset.updated_at),
+    )
+
+
+def _detail(asset) -> PromptDetail:
+    versions = default_store().versions(asset.id)
+    return PromptDetail(
+        id=asset.id,
+        name=asset.name,
+        body=asset.body,
+        variables=_wire_decls(asset.variables),
+        latest_version=asset.latest_version_number,
+        version_count=len(versions),
+        created_at=_iso(asset.created_at),
+        updated_at=_iso(asset.updated_at),
+    )
+
+
+def _version_view(version) -> PromptVersionView:
+    return PromptVersionView(
+        id=version.id,
+        prompt_id=version.prompt_id,
+        number=version.number,
+        name=version.name,
+        body=version.body,
+        variables=_wire_decls(version.variables),
+        content_hash=version.content_hash,
+        created_at=_iso(version.created_at),
+    )
+
+
+@app.post("/prompts", response_model=PromptDetail)
+async def create_prompt(body: PromptCreateRequest) -> PromptDetail:
+    """Start a new prompt. Nothing is published and nothing runs."""
+    asset = _store().create(
+        body.name, body=body.body, variables=_domain_decls(body.variables)
+    )
+    return _detail(asset)
+
+
+@app.get("/prompts", response_model=list[PromptSummary])
+async def list_prompts() -> list[PromptSummary]:
+    """The workspace list, most recently updated first."""
+    return [_summary(asset) for asset in _store().list()]
+
+
+@app.get("/prompts/{prompt_id}", response_model=PromptDetail)
+async def get_prompt(prompt_id: str) -> PromptDetail:
+    """One prompt and its editable draft."""
+    return _detail(_find_prompt(prompt_id))
+
+
+@app.patch("/prompts/{prompt_id}/draft", response_model=PromptDetail)
+async def save_prompt_draft(prompt_id: str, body: PromptDraftRequest) -> PromptDetail:
+    """Save the draft (feature A).
+
+    This never publishes a version and never starts a run — saving what you are
+    working on is not the same as freezing it or executing it.
+    """
+    _find_prompt(prompt_id)
+    asset = _store().update_draft(
+        prompt_id,
+        name=body.name,
+        body=body.body,
+        variables=_domain_decls(body.variables) if body.variables is not None else None,
+    )
+    return _detail(asset)
+
+
+@app.post("/prompts/{prompt_id}/versions", response_model=PromptVersionView)
+async def publish_prompt_version(prompt_id: str) -> PromptVersionView:
+    """Publish the current draft as the next immutable version (feature B).
+
+    Idempotent by content (D-3): publishing the same body again returns the
+    existing latest version rather than minting a duplicate.
+    """
+    _find_prompt(prompt_id)
+    return _version_view(_store().publish(prompt_id))
+
+
+@app.get("/prompts/{prompt_id}/versions", response_model=list[PromptVersionView])
+async def list_prompt_versions(prompt_id: str) -> list[PromptVersionView]:
+    """Every published version, oldest first."""
+    _find_prompt(prompt_id)
+    return [_version_view(v) for v in _store().versions(prompt_id)]
+
+
+@app.get("/prompts/{prompt_id}/versions/{number}", response_model=PromptVersionView)
+async def get_prompt_version(prompt_id: str, number: int) -> PromptVersionView:
+    """One published version, read-only. A version never changes once written."""
+    asset = _find_prompt(prompt_id)
+    version = _store().find_version(prompt_id, number)
+    if version is None:
+        published = default_store().versions(prompt_id)
+        available = ", ".join(f"v{v.number}" for v in published) or "none"
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"'{asset.name}' has no version {number}. Published versions: "
+                f"{available}."
+            ),
+        )
+    return _version_view(version)
 
 
 # --------------------------------------------------------------------------- #

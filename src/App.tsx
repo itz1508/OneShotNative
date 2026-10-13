@@ -8,18 +8,25 @@
  * not report.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { EditorReview } from "./components/EditorReview";
-import { OfflineBanner } from "./components/OfflineBanner";
 import { ProcessDisplay } from "./components/ProcessDisplay";
 import { ResultPanel } from "./components/ResultPanel";
 import { SourcePanel } from "./components/SourcePanel";
 import { SystemStatus } from "./components/SystemStatus";
+import { Workspace } from "./components/Workspace";
 import { IconAlert, IconCheck, IconInfo } from "./components/icons";
-import { Button, Callout, EmptyState, Panel, Pill } from "./components/ui";
+import { Button, Callout, EmptyState, Mono, Panel, Pill } from "./components/ui";
 import type { RunRequest, WorkflowState } from "./lib/schema";
 import { useRun } from "./lib/useRun";
+
+type View = "run" | "workspace";
+
+const VIEWS: { value: View; label: string }[] = [
+  { value: "run", label: "Run" },
+  { value: "workspace", label: "Workspace" },
+];
 
 const STATE_TONE: Record<WorkflowState, "neutral" | "accent" | "success" | "warning"> = {
   Starting: "neutral",
@@ -34,17 +41,7 @@ export default function App() {
   const run = useRun();
   const [statusOpen, setStatusOpen] = useState(false);
   const [lastRequest, setLastRequest] = useState<RunRequest | null>(null);
-
-  // Gap 8: Close system modal on Escape
-  useEffect(() => {
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape" && statusOpen) {
-        setStatusOpen(false);
-      }
-    }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [statusOpen]);
+  const [view, setView] = useState<View>("run");
 
   const running = run.phase === "running";
   const finalized = run.state === "Finalized";
@@ -70,15 +67,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Gap 8 — Skip link for keyboard and screen reader accessibility */}
-      <a
-        href="#main"
-        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:border focus:border-accent focus:bg-background focus:px-3.5 focus:py-2 focus:text-sm focus:font-medium focus:text-foreground focus:shadow-lg focus:outline-none"
-      >
-        Skip to main content
-      </a>
-      {/* Gap 6 — offline banner; auto-hides when online */}
-      <OfflineBanner />
       <header className="sticky top-0 z-20 border-b border-border bg-background/85 backdrop-blur">
         <div className="mx-auto flex w-full max-w-[100rem] flex-wrap items-center gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-2.5">
@@ -97,7 +85,23 @@ export default function App() {
           </div>
 
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Pill tone={STATE_TONE[run.state]}>{run.state}</Pill>
+            <nav
+              aria-label="Views"
+              className="flex items-center gap-0.5 rounded-md border border-border p-0.5"
+            >
+              {VIEWS.map((entry) => (
+                <Button
+                  key={entry.value}
+                  size="sm"
+                  variant={view === entry.value ? "primary" : "ghost"}
+                  aria-current={view === entry.value ? "page" : undefined}
+                  onClick={() => setView(entry.value)}
+                >
+                  {entry.label}
+                </Button>
+              ))}
+            </nav>
+            {view === "run" ? <Pill tone={STATE_TONE[run.state]}>{run.state}</Pill> : null}
             <Button
               size="sm"
               variant="ghost"
@@ -120,12 +124,40 @@ export default function App() {
       </header>
 
       <main id="main" className="mx-auto w-full max-w-[100rem] px-4 py-6 sm:px-6 lg:py-8">
+        {view === "workspace" ? (
+          <Workspace />
+        ) : (
         <div className="grid gap-6 lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] lg:items-start">
           <div className="space-y-4 lg:sticky lg:top-24">
             <SourcePanel running={running} onRun={handleRun} hasResult={run.output !== null} />
           </div>
 
           <div className="space-y-4">
+            {run.output?.prompt ? (
+              <Callout
+                tone="accent"
+                icon={<IconInfo />}
+                title={`Ran ${run.output.prompt.prompt_name} v${run.output.prompt.version_number}`}
+              >
+                <p>
+                  Frozen at admission as <Mono>{run.output.prompt.version_id}</Mono> — editing the
+                  prompt afterwards could not have changed this run.
+                </p>
+                {Object.keys(run.output.prompt.variables).length ? (
+                  <p>
+                    Values frozen:{" "}
+                    {Object.entries(run.output.prompt.variables).map(([key, value]) => (
+                      <Mono key={key} className="mr-2">
+                        {key} = {value}
+                      </Mono>
+                    ))}
+                  </p>
+                ) : (
+                  <p>This prompt declares no variables.</p>
+                )}
+              </Callout>
+            ) : null}
+
             {run.error ? (
               <Callout tone="danger" icon={<IconAlert />} title="This run did not deliver">
                 <p>{run.error}</p>
@@ -193,6 +225,7 @@ export default function App() {
             ) : null}
           </div>
         </div>
+        )}
       </main>
 
       <footer className="border-t border-border">

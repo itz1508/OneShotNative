@@ -6,6 +6,12 @@
     "module": "ESNext",
     "skipLibCheck": true,
 
+    /* Only @types/node is ambient. The dependency tree drags in unused ambient
+       @types trees (d3 via mermaid, babel, estree, geojson, ...) which tsc
+       auto-includes from node_modules/@types. Restricting `types` keeps one bad
+       third-party .d.ts from breaking `tsc --noEmit`. */
+    "types": ["node"],
+
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

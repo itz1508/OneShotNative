@@ -12,7 +12,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8.0"]
+# Playwright Python drives the real-browser E2E gates (tests/e2e_browser.py,
+# tests/e2e_presend.py). It is optional because the Python unit tests and the
+# HTTP E2E gates do not need a browser.
+test = [
+    "pytest>=8.0",
+    "playwright>=1.44",
+]
 
 [tool.uv]
 # The domain is imported as plain packages (systems/, capabilities/); nothing is
@@ -22,4 +28,8 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --basetemp=.pytest_cache/tmp"
+# Note: do NOT pin --basetemp under .pytest_cache/. pytest 9 creates the basetemp
+# with a non-recursive mkdir, while .pytest_cache/ itself is created lazily by the
+# cache provider -- so a nested basetemp makes pytest error on a clean checkout.
+# Pytest's default temp base always exists and needs no configuration.
+addopts = "-q"

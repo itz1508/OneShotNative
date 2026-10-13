@@ -1,0 +1,17 @@
+workflow,scope,desktop_browser,gate_command,real_provider_required,docker_required,evidence_required,status
+Admit a run from a saved objective,system,no,"uv run --locked --python 3.11 python -m tests.e2e_http",no,no,"run_id returned; output.json persisted",covered
+Scan classifies supplied sources,system,no,"uv run --locked --python 3.11 python -m tests.e2e_http",no,no,"scan observations in trace + output.sources",covered
+Read extracts textual sources,system,no,"uv run --locked --python 3.11 python -m tests.e2e_http",no,no,"read segments + reported digest in output",covered
+Prepare keeps instructions apart from content,system,no,"uv run --locked --python 3.11 python -m pytest -q",no,no,"context_decisions + trust boundary",covered
+Quality & Coverage Check gates generation,system,no,"uv run --locked --python 3.11 python -m tests.e2e_http",no,no,"quality.outcome == Sufficient",covered
+Generate via OpenAI-protocol provider,system,no,"uv run --locked --python 3.11 python -m tests.e2e_multi_provider_http",no,no,"grounded result with citations (LOCAL RESPONDER, not a real model)",covered
+Generate via a real configured model,system,no,"uv run --locked --python 3.11 python -m tests.e2e_multi_provider_http",yes,no,"real provider response + attribution",not_verified
+Generate via a real Ollama model,system,no,"uv run --locked --python 3.11 python -m tests.e2e_multi_provider_http",yes,no,"real local model response",not_verified
+Process Display streams the observed trace,system,no,"uv run --locked --python 3.11 python -m tests.e2e_http",no,no,"SSE trace frames replayed + end frame",covered
+Objective to result in a real browser,desktop browser,yes,"xvfb-run -a uv run --locked --python 3.11 python -m tests.e2e_browser",no,no,"Chromium run reaches Editor Review; output.json persisted",covered
+Pre-send validation journey,desktop browser,yes,"xvfb-run -a uv run --locked --python 3.11 python -m tests.e2e_presend",no,no,"empty objective + empty source refused; nothing sent",covered
+System panel contract drift detection,desktop browser,yes,"xvfb-run -a uv run --locked --python 3.11 python -m tests.e2e_presend",no,no,"panel reports System reachable + contract in sync",covered
+Workflow transitions (pause/resume/review/finalize),system,no,"uv run --locked --python 3.11 python -m pytest -q",no,no,"state machine transitions owned by the System",covered
+Restart and recovery,deployment,no,"docker compose up -d --wait && docker compose restart",no,yes,"runs are in-memory only; state resets cleanly",not_verified
+Docker deployment on the target host,deployment,no,"docker compose config && docker compose build --pull",no,yes,"lock-consuming image; Python 3.11; versions match uv.lock",not_verified
+Mobile application build,excluded,no,,no,no,"explicitly out of scope for v1",out_of_scope

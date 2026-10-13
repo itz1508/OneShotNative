@@ -963,7 +963,7 @@ def test_health_reports_configuration_truth(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_schema_endpoint_matches_the_contract() -> None:
     body = client.get("/schema").json()
-    assert body["schema_version"] == "1.1"
+    assert body["schema_version"] == "1.2"
     assert "PreparedInput" in body["models"]
 
 
@@ -972,7 +972,7 @@ def test_run_returns_a_complete_document(monkeypatch: pytest.MonkeyPatch) -> Non
     response = client.post("/run", json=run_payload())
     assert response.status_code == 200, response.text
     output = OneShotOutput.model_validate(response.json())
-    assert output.schema_version == "1.1"
+    assert output.schema_version == "1.2"
     assert output.quality.outcome.value == "Sufficient"
     assert output.is_generated is False  # no provider configured on this host
     assert_contiguous(output)
@@ -1003,7 +1003,7 @@ def test_the_events_endpoint_replays_the_observed_history(
     body = response.text
     assert "event: trace" in body
     assert "event: output" in body
-    assert '"schema_version": "1.1"' in body
+    assert '"schema_version": "1.2"' in body
 
 
 def test_the_events_endpoint_is_truthful_about_an_unknown_run() -> None:

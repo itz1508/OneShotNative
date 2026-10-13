@@ -9,8 +9,9 @@
  * never to reimplement a pipeline decision.
  */
 
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { listPromptVersions, listPrompts } from "../lib/api";
 import { SOURCE_ICONS, IconArrowRight, IconClose, IconPlus } from "./icons";
 import {
   Button,
@@ -30,6 +31,8 @@ import {
 import {
   SOURCE_TYPES,
   TASK_KINDS,
+  type PromptSummary,
+  type PromptVersionView,
   type RunRequest,
   type SourceOperation,
   type SourceType,
@@ -37,6 +40,8 @@ import {
 } from "../lib/schema";
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+const VARIABLE_RE = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g;
 
 const OPERATIONS: { value: SourceOperation; label: string; hint: string }[] = [
   { value: "ADD_SOURCE", label: "Add to scope", hint: "Read and used in this run." },
@@ -113,11 +118,72 @@ export function SourcePanel({ running, onRun, hasResult }: SourcePanelProps) {
   const [taskKind, setTaskKind] = useState<TaskKind>("unclassified");
   const [drafts, setDrafts] = useState<Draft[]>([newDraft("text")]);
   const [pauseBeforeGenerate, setPauseBeforeGenerate] = useState(true);
-  const [proceedOnIncomplete, setProceedOnIncomplete] = useState(false);
   const [maxContextChars, setMaxContextChars] = useState(200_000);
   const [maxPerSource, setMaxPerSource] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
   const fileInputs = useRef<Record<string, HTMLInputElement | null>>({});
+
+  // Saved prompts (feature F). Picking one supplies the objective and freezes a
+  // version at admission — but nothing runs until Run is pressed.
+  const [prompts, setPrompts] = useState<PromptSummary[]>([]);
+  const [promptId, setPromptId] = useState("");
+  const [versions, setVersions] = useState<PromptVersionView[]>([]);
+  const [resolution, setResolution] = useState<"latest" | number>("latest");
+  const [variables, setVariables] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    listPrompts()
+      .then(setPrompts)
+      .catch(() => setPrompts([])); // the direct-intent run still works without a workspace
+  }, []);
+
+  useEffect(() => {
+    if (!promptId) {
+      setVersions([]);
+      setResolution("latest");
+      setVariables({});
+      return;
+    }
+    let active = true;
+    listPromptVersions(promptId)
+      .then((list) => {
+        if (!active) return;
+        setVersions(list);
+        setResolution("latest");
+        setVariables({});
+      })
+      .catch(() => {
+        if (active) setVersions([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [promptId]);
+
+  const selectedVersion = useMemo(() => {
+    if (!promptId || versions.length === 0) return null;
+    if (resolution === "latest") return versions[versions.length - 1];
+    return versions.find((version) => version.number === resolution) ?? null;
+  }, [promptId, versions, resolution]);
+
+  const declared = useMemo(() => selectedVersion?.variables ?? [], [selectedVersion]);
+
+  const unresolved = useMemo(
+    () =>
+      declared
+        .filter((v) => !(variables[v.name] ?? "").trim() && v.default === null)
+        .map((v) => v.name),
+    [declared, variables],
+  );
+
+  const renderedPrompt = useMemo(() => {
+    if (!selectedVersion) return "";
+    return selectedVersion.body.replace(VARIABLE_RE, (_match, name: string) => {
+      const given = (variables[name] ?? "").trim();
+      if (given) return given;
+      return declared.find((v) => v.name === name)?.default ?? "";
+    });
+  }, [selectedVersion, declared, variables]);
 
   function update(key: string, patch: Partial<Draft>) {
     setDrafts((current) =>
@@ -156,8 +222,17 @@ export function SourcePanel({ running, onRun, hasResult }: SourcePanelProps) {
   }
 
   function submit() {
-    const trimmed = intent.trim();
-    if (!trimmed) {
+    const usingPrompt = promptId !== "";
+    if (usingPrompt && !selectedVersion) {
+      setFormError("That prompt has no published version to run. Publish one first.");
+      return;
+    }
+    if (usingPrompt && unresolved.length) {
+      setFormError(`Fill in a value for ${unresolved.join(", ")} before running this prompt.`);
+      return;
+    }
+    const trimmed = usingPrompt ? renderedPrompt.trim() : intent.trim();
+    if (!usingPrompt && !trimmed) {
       setFormError("Tell OneShot what you want done with these sources.");
       return;
     }
@@ -204,31 +279,146 @@ export function SourcePanel({ running, onRun, hasResult }: SourcePanelProps) {
         max_context_chars: Number.isFinite(maxContextChars) ? maxContextChars : 200_000,
         max_chars_per_source:
           Number.isFinite(parsedPerSource) && parsedPerSource >= 200 ? parsedPerSource : null,
-        // Gap 7 — HITL for partial context.
-        proceed_on_incomplete: proceedOnIncomplete,
       },
+      ...(usingPrompt
+        ? {
+            prompt_ref: {
+              prompt_id: promptId,
+              version: typeof resolution === "number" ? resolution : null,
+              variables,
+            },
+          }
+        : {}),
     });
   }
 
   return (
     <div className="space-y-4">
       <Panel className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-heading text-sm text-foreground">Saved prompt</h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Optional — run against a published prompt version instead of typing an objective.
+            </p>
+          </div>
+          <Pill tone={promptId ? "accent" : "neutral"}>
+            {promptId ? "using a saved prompt" : "free text"}
+          </Pill>
+        </div>
+
+        {prompts.length === 0 ? (
+          <Hint>
+            No saved prompts yet. Create one in the Workspace and publish a version; it will then
+            appear here.
+          </Hint>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Prompt" htmlFor="saved-prompt">
+              <Select
+                id="saved-prompt"
+                value={promptId}
+                onChange={(event) => setPromptId(event.target.value)}
+              >
+                <option value="">— none (type an objective) —</option>
+                {prompts.map((prompt) => (
+                  <option
+                    key={prompt.id}
+                    value={prompt.id}
+                    disabled={prompt.latest_version === null}
+                  >
+                    {prompt.name}
+                    {prompt.latest_version
+                      ? ` (latest v${prompt.latest_version})`
+                      : " (not published)"}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+
+            <Field label="Version" htmlFor="saved-prompt-version" hint="latest, or pinned">
+              <Select
+                id="saved-prompt-version"
+                value={String(resolution)}
+                disabled={!promptId}
+                onChange={(event) =>
+                  setResolution(
+                    event.target.value === "latest" ? "latest" : Number(event.target.value),
+                  )
+                }
+              >
+                <option value="latest">Latest</option>
+                {versions.map((version) => (
+                  <option key={version.id} value={version.number}>
+                    Pinned v{version.number}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+        )}
+
+        {promptId && declared.length ? (
+          <div className="space-y-2">
+            <Label hint="frozen when the run starts">Values to freeze</Label>
+            <ul className="grid gap-3 sm:grid-cols-2">
+              {declared.map((decl) => (
+                <li key={decl.name}>
+                  <Field
+                    label={decl.name}
+                    htmlFor={`var-${decl.name}`}
+                    hint={decl.default !== null ? `default: ${decl.default}` : "required"}
+                  >
+                    <TextInput
+                      id={`var-${decl.name}`}
+                      value={variables[decl.name] ?? ""}
+                      placeholder={decl.default ?? ""}
+                      onChange={(event) =>
+                        setVariables((current) => ({
+                          ...current,
+                          [decl.name]: event.target.value,
+                        }))
+                      }
+                    />
+                  </Field>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {promptId && selectedVersion ? (
+          <div className="space-y-1.5">
+            <Label hint="the objective the System will run">Objective preview</Label>
+            <p className="rounded-md border border-border bg-background/60 px-3 py-2.5 text-sm leading-relaxed text-muted-foreground">
+              {renderedPrompt || "(fill in the variables to preview the objective)"}
+            </p>
+          </div>
+        ) : null}
+      </Panel>
+
+      <Panel className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor="intent" hint="One objective, the sources it applies to.">
+          <Label
+            htmlFor="intent"
+            hint={promptId ? "supplied by the saved prompt" : "One objective, the sources it applies to."}
+          >
             What should OneShot do?
           </Label>
           <TextArea
             id="intent"
             rows={3}
-            value={intent}
+            value={promptId ? renderedPrompt : intent}
             placeholder="Summarise the session expiry rules and flag anything the sources leave unclear."
+            disabled={promptId !== ""}
             aria-invalid={formError !== null}
             aria-describedby={formError ? "intent-error" : undefined}
             onChange={(event) => setIntent(event.target.value)}
           />
           <Hint>
-            The objective is handed to the System whole. It is never rewritten, classified or
-            answered in the browser.
+            {promptId
+              ? "This objective comes from the saved prompt and is frozen at admission — edit the prompt in the Workspace to change it."
+              : "The objective is handed to the System whole. It is never rewritten, classified or answered in the browser."}
           </Hint>
         </div>
 
@@ -292,23 +482,6 @@ export function SourcePanel({ running, onRun, hasResult }: SourcePanelProps) {
               <Mono>so you can resume it yourself</Mono>
             </label>
           </div>
-        </div>
-
-        {/* Gap 7 — HITL for partial context */}
-        <div className="flex items-center gap-2.5">
-          <label className="flex cursor-pointer items-center gap-2.5 text-sm text-foreground">
-            <input
-              type="checkbox"
-              className="size-4 cursor-pointer accent-[var(--color-primary)]"
-              checked={proceedOnIncomplete}
-              onChange={(event) => setProceedOnIncomplete(event.target.checked)}
-            />
-            Proceed on incomplete context
-          </label>
-          <Hint>
-            When unchecked (default), an Incomplete quality check pauses the run
-            and shows the gaps for your review before generating.
-          </Hint>
         </div>
       </Panel>
 
