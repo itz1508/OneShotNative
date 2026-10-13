@@ -69,7 +69,7 @@ try {
   });
   await waitForServer(BASE);
 
-  const { results, ok } = await runSmoke({ baseUrl: BASE, headless: false });
+  const { results, ok } = await runSmoke({ baseUrl: BASE, headless: true });
   console.log(
     `\n${results.filter((result) => result.ok).length}/${results.length} checks passed`,
   );
